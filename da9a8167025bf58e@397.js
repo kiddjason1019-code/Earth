@@ -55,10 +55,37 @@ function* _4(d3,size,styles,graticule,countries,zones,color,path,projection)
     .attr("class", "zone")
     .attr("fill", (d) => color(d.properties.minutes_offset));
 
-  zonesPath
-    .attr("d", path)
-    .append("title")
-    .text((d) => `${d.properties.utc_offset}`);
+  zonesPath.attr("d", path);
+
+  const tooltip = svg.append("title");
+  const formatPopulation = d3.format(",");
+
+  function updateTooltip(event) {
+    const coordinates = projection.invert(d3.pointer(event));
+    if (!coordinates) {
+      tooltip.text("");
+      return;
+    }
+
+    const timezone = zones.features.find((zone) =>
+      d3.geoContains(zone, coordinates)
+    );
+    const country = countries.features.find((countryFeature) =>
+      d3.geoContains(countryFeature, coordinates)
+    );
+    const timezoneLabel = timezone?.properties?.utc_offset ?? "Unknown timezone";
+    const countryName = country?.properties?.name ?? "Unknown country";
+    const population = country?.properties?.population
+      ? formatPopulation(country.properties.population)
+      : "N/A";
+
+    tooltip.text(
+      `${timezoneLabel}\n${countryName}\nPopulation: ${population}`
+    );
+  }
+
+  svg.on("mousemove", updateTooltip);
+  svg.on("mouseleave", () => tooltip.text(""));
 
   function render() {
     sphere.attr("d", path);
@@ -132,9 +159,19 @@ function _land(topojson,world){return(
 topojson.feature(world, world.objects.land)
 )}
 
-function _countries(topojson,world){return(
-topojson.feature(world, world.objects.countries)
-)}
+function _countries(topojson,world,country_by_id){
+  const features = topojson.feature(world, world.objects.countries).features;
+  for (const feature of features) {
+    const id = String(feature.id ?? "").padStart(3, "0");
+    const meta = country_by_id.get(id);
+    feature.properties = {
+      ...(feature.properties ?? {}),
+      name: meta?.name,
+      population: meta?.population
+    };
+  }
+  return { type: "FeatureCollection", features };
+}
 
 function _world(d3){return(
 d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
@@ -236,6 +273,23 @@ function _zones(topojson,timezones){return(
 topojson.feature(timezones, timezones.objects.timezones2)
 )}
 
+function _country_metadata(d3){return(
+d3.json("https://restcountries.com/v3.1/all?fields=ccn3,name,population")
+)}
+
+function _country_by_id(country_metadata){
+  const lookup = new Map();
+  for (const country of country_metadata ?? []) {
+    if (!country?.ccn3) continue;
+    const name = country.name?.common ?? country.name ?? "Unknown";
+    lookup.set(country.ccn3.padStart(3, "0"), {
+      name,
+      population: country.population
+    });
+  }
+  return lookup;
+}
+
 export default function define(runtime, observer) {
   const main = runtime.module();
   function toString() { return this.url; }
@@ -253,7 +307,7 @@ export default function define(runtime, observer) {
   main.variable(observer()).define(["md"], _6);
   main.variable(observer()).define(["md"], _7);
   main.variable(observer("land")).define("land", ["topojson","world"], _land);
-  main.variable(observer("countries")).define("countries", ["topojson","world"], _countries);
+  main.variable(observer("countries")).define("countries", ["topojson","world","country_by_id"], _countries);
   main.variable(observer("world")).define("world", ["d3"], _world);
   main.variable(observer("graticule")).define("graticule", ["d3"], _graticule);
   main.variable(observer()).define(["md"], _12);
@@ -271,6 +325,8 @@ export default function define(runtime, observer) {
   main.variable(observer()).define(["md"], _24);
   main.variable(observer("timezones")).define("timezones", ["FileAttachment"], _timezones);
   main.variable(observer("zones")).define("zones", ["topojson","timezones"], _zones);
+  main.variable(observer("country_metadata")).define("country_metadata", ["d3"], _country_metadata);
+  main.variable(observer("country_by_id")).define("country_by_id", ["country_metadata"], _country_by_id);
   const child1 = runtime.module(define1);
   main.import("ramp", child1);
   return main;
